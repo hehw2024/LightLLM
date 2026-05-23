@@ -117,6 +117,9 @@ class ModelRpcServer(rpyc.Service):
         logger.info(f"use {self.backend.__class__.__name__}")
         self.backend.init_model(kvargs)
 
+        # Inject MetricClient into backend for step-level metrics
+        self.backend.metric_client = getattr(self, "metric_client", None)
+
         # only deepseekv3 can support auto_update_redundancy_expert
         if self.args.auto_update_redundancy_expert:
             self.redundancy_expert_manager = RedundancyExpertManager(self.backend.model)
@@ -186,6 +189,16 @@ def _init_env(
     g_router_lock.obj = router_lock
 
     model_rpc_server = ModelRpcServer(args, rank, rank_in_node, node_world_size, info_queue)
+
+    # Create MetricClient for this inference worker process
+    try:
+        from lightllm.server.metrics.manager import MetricClient
+
+        model_rpc_server.metric_client = MetricClient(args.metric_port)
+    except Exception as e:
+        logger.warning(f"Failed to create MetricClient: {e}, metrics will be disabled for this worker")
+        model_rpc_server.metric_client = None
+
     # Start rpyc server with Unix socket
     t = ThreadedServer(model_rpc_server, socket_path=socket_path, protocol_config={"allow_pickle": True})
 

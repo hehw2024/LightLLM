@@ -27,6 +27,27 @@ MONITOR_INFO = {
     "lightllm_cache_ratio": "cache length / input_length",
     "lightllm_batch_current_max_tokens": "dynamic max token used for current batch",
     "lightllm_request_mtp_avg_token_per_step": "Average number of tokens per step",
+    # --- Prefill/Decode step-level throughput ---
+    "lightllm_step_prefill_tokens": "Number of new tokens processed in a prefill step",
+    "lightllm_step_decode_tokens": "Number of tokens processed in a decode step",
+    "lightllm_step_prefill_duration": "Wall-clock duration of a prefill step (seconds)",
+    "lightllm_step_decode_duration": "Wall-clock duration of a decode step (seconds)",
+    "lightllm_step_decode_throughput": "Decode throughput in tokens per second",
+    # --- KV Cache ---
+    "lightllm_kv_cache_hit_tokens": "Number of tokens that hit the radix cache",
+    "lightllm_kv_cache_miss_tokens": "Number of tokens that missed the radix cache",
+    "lightllm_kv_cache_eviction_events": "Number of KV cache eviction events",
+    "lightllm_kv_cache_evicted_tokens": "Total number of tokens evicted from KV cache",
+    "lightllm_kv_cache_utilization_ratio": "Ratio of used KV cache to total capacity",
+    # --- Batch utilization ---
+    "lightllm_batch_token_utilization": "Ratio of actual tokens to max tokens per step",
+    "lightllm_batch_size_utilization": "Ratio of actual batch size to max batch size",
+    # --- Attention latency ---
+    "lightllm_attention_duration": "Attention kernel duration per step (seconds)",
+    # --- GPU hardware ---
+    "lightllm_gpu_memory_used_bytes": "GPU memory currently allocated (bytes)",
+    "lightllm_gpu_memory_total_bytes": "Total GPU memory available (bytes)",
+    "lightllm_gpu_utilization_percent": "GPU compute utilization percentage",
 }
 
 
@@ -100,6 +121,33 @@ class Monitor:
             mtp_avg_token_per_step_buckets = [1.0, 2.0]
         self.create_histogram("lightllm_request_mtp_avg_token_per_step", mtp_avg_token_per_step_buckets)
 
+        # --- Prefill/Decode step-level throughput ---
+        step_token_buckets = [i + 1 for i in range(0, 8192)]
+        self.create_histogram("lightllm_step_prefill_tokens", step_token_buckets, labelnames=["method"])
+        self.create_histogram("lightllm_step_decode_tokens", step_token_buckets, labelnames=["method"])
+        self.create_histogram("lightllm_step_prefill_duration", self.duration_buckets, labelnames=["method"])
+        self.create_histogram("lightllm_step_decode_duration", self.duration_buckets, labelnames=["method"])
+        self.create_gauge("lightllm_step_decode_throughput")
+
+        # --- KV Cache ---
+        self.create_histogram("lightllm_kv_cache_hit_tokens", input_len_buckets)
+        self.create_histogram("lightllm_kv_cache_miss_tokens", input_len_buckets)
+        self.create_counter("lightllm_kv_cache_eviction_events")
+        self.create_counter("lightllm_kv_cache_evicted_tokens")
+        self.create_gauge("lightllm_kv_cache_utilization_ratio")
+
+        # --- Batch utilization ---
+        self.create_histogram("lightllm_batch_token_utilization", ratio_buckets)
+        self.create_histogram("lightllm_batch_size_utilization", ratio_buckets)
+
+        # --- Attention latency ---
+        self.create_histogram("lightllm_attention_duration", self.duration_buckets, labelnames=["method"])
+
+        # --- GPU hardware ---
+        self.create_gauge("lightllm_gpu_memory_used_bytes")
+        self.create_gauge("lightllm_gpu_memory_total_bytes")
+        self.create_gauge("lightllm_gpu_utilization_percent")
+
     def create_histogram(self, name, buckets, labelnames=None):
         if labelnames is None:
             histogram = Histogram(name, MONITOR_INFO[name], buckets=buckets, registry=self.registry)
@@ -120,17 +168,21 @@ class Monitor:
         gauge = Gauge(name, MONITOR_INFO[name], registry=self.registry)
         self.monitor_registry[name] = gauge
 
-    def counter_inc(self, name, label=None):
-        if label is None:
-            self.monitor_registry[name].inc()
+    def counter_inc(self, name, label=None, value=1, labels=None):
+        if labels is not None:
+            self.monitor_registry[name].labels(**labels).inc(value)
+        elif label is not None:
+            self.monitor_registry[name].labels(method=label).inc(value)
         else:
-            self.monitor_registry[name].labels(method=label).inc()
+            self.monitor_registry[name].inc(value)
 
-    def histogram_observe(self, name, value, label=None):
-        if label is None:
-            self.monitor_registry[name].observe(value)
-        else:
+    def histogram_observe(self, name, value, label=None, labels=None):
+        if labels is not None:
+            self.monitor_registry[name].labels(**labels).observe(value)
+        elif label is not None:
             self.monitor_registry[name].labels(method=label).observe(value)
+        else:
+            self.monitor_registry[name].observe(value)
 
     def gauge_set(self, name, value):
         self.monitor_registry[name].set(value)

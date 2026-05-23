@@ -198,3 +198,19 @@ class StartArgs:
     disable_linear_att_small_page_cpu_cache: bool = field(default=False)
     linear_att_cache_size: Optional[int] = field(default=None)
     linear_att_ssm_data_type: Optional[str] = field(default="float32", metadata={"choices": ["bfloat16", "float32"]})
+
+    # CPU MoE expert offloading
+    enable_cpu_offload_moe: bool = field(default=False)
+    cpu_offload_num_gpu_experts: int = field(default=0)
+    cpu_offload_expert_strategy: str = field(
+        default="frequency",
+        metadata={"choices": ["static", "frequency", "uniform", "front_loading"]},
+    )
+    cpu_offload_num_cpu_threads: int = field(default=0)
+    cpu_offload_numa_aware: bool = field(default=False)
+    cpu_offload_quant_type: str = field(
+        default="auto",
+        metadata={"choices": ["auto", "fp32", "bf16", "int8", "int4"]},
+    )
+    cpu_offload_calibrate_steps: int = field(default=100)
+    cpu_offload_config_path: Optional[str] = field(default=None)

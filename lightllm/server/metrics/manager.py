@@ -45,11 +45,11 @@ class MetricServer(rpyc.Service):
         # (to finalize the service, if needed)
         pass
 
-    def exposed_counter_inc(self, name: str, label: str = None) -> None:
-        return self.monitor.counter_inc(name, label)
+    def exposed_counter_inc(self, name: str, label: str = None, value: float = 1, labels: dict = None) -> None:
+        return self.monitor.counter_inc(name, label, value, labels)
 
-    def exposed_histogram_observe(self, name: str, value: float, label: str = None) -> None:
-        return self.monitor.histogram_observe(name, value, label)
+    def exposed_histogram_observe(self, name: str, value: float, label: str = None, labels: dict = None) -> None:
+        return self.monitor.histogram_observe(name, value, label, labels)
 
     def exposed_gauge_set(self, name: str, value: float) -> None:
         return self.monitor.gauge_set(name, value)
@@ -99,16 +99,16 @@ class MetricClient(threading.Thread):
         ans = await self._generate_latest()
         return ans
 
-    def counter_inc(self, *args, **kwargs):
+    def counter_inc(self, name, label=None, value=1, labels=None):
         def inner_func():
-            return self.conn.root.counter_inc(*args, **kwargs)
+            return self.conn.root.counter_inc(name, label, value, labels)
 
         self._append_task(inner_func)
         return
 
-    def histogram_observe(self, *args, **kwargs):
+    def histogram_observe(self, name, value, label=None, labels=None):
         def inner_func():
-            return self.conn.root.histogram_observe(*args, **kwargs)
+            return self.conn.root.histogram_observe(name, value, label, labels)
 
         self._append_task(inner_func)
         return

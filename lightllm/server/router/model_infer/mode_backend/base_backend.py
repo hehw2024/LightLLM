@@ -81,6 +81,14 @@ class ModeBackend:
         self._radix_tree_merge_counter: int = 0
         self._enable_radix_tree_timer_merge: bool = enable_radix_tree_timer_merge()
         self._radix_tree_merge_update_delta: int = get_radix_tree_merge_update_delta()
+
+        # Metrics client — set by ModelRpcServer after backend creation
+        self.metric_client = None
+        # Step-level metric accumulators
+        self._last_step_new_tokens = 0
+        self._last_step_total_tokens = 0
+        self._last_step_prefix_tokens = 0
+        self._last_step_batch_size = 0
         pass
 
     def init_model(self, kvargs):
@@ -175,6 +183,7 @@ class ModeBackend:
         self.model, self.is_multimodal = get_model(model_cfg, model_kvargs)
         self.model: TpPartBaseModel = self.model  # for easy typing
         set_random_seed(2147483647)
+
         self.is_linear_att_mixed_model = isinstance(self.model.req_manager, ReqManagerForMamba)
 
         if self.is_linear_att_mixed_model:
@@ -263,6 +272,15 @@ class ModeBackend:
         # 开启 mtp 模式，需要完成mtp model的初始化
         if self.args.mtp_mode:
             self.init_mtp_draft_model(kvargs)
+
+        # Set up eviction callback for KV cache metrics
+        if self.radix_cache is not None and self.metric_client is not None:
+            self.radix_cache._eviction_callback = self._on_kv_cache_eviction
+
+        # Start GPU metrics collection thread (only on master rank to avoid duplicates)
+        if self.is_master_in_dp and self.metric_client is not None:
+            gpu_thread = threading.Thread(target=self._gpu_metrics_loop, daemon=True)
+            gpu_thread.start()
 
         # 启动infer_loop_thread, 启动两个线程进行推理，对于具备双batch推理折叠得场景
         # 可以降低 cpu overhead，大幅提升gpu得使用率。
@@ -900,3 +918,96 @@ class ModeBackend:
         else:
             self.is_master_in_node = False
         return
+
+    # ----------------------------------------------------------------
+    # Metrics helper methods
+    # ----------------------------------------------------------------
+
+    def _emit_step_metrics(self, method: str, duration: float):
+        """Emit per-step performance metrics for prefill or decode.
+
+        Args:
+            method: "prefill" or "decode"
+            duration: Wall-clock seconds for this step
+        """
+        mc = self.metric_client
+        if mc is None or not self.is_master_in_dp:
+            return
+
+        new_tokens = self._last_step_new_tokens
+        total_tokens = self._last_step_total_tokens
+        prefix_tokens = self._last_step_prefix_tokens
+        batch_size = self._last_step_batch_size
+
+        # Step-level throughput
+        if method == "prefill":
+            mc.histogram_observe("lightllm_step_prefill_tokens", new_tokens, label=method)
+            mc.histogram_observe("lightllm_step_prefill_duration", duration, label=method)
+        else:
+            mc.histogram_observe("lightllm_step_decode_tokens", new_tokens, label=method)
+            mc.histogram_observe("lightllm_step_decode_duration", duration, label=method)
+            if duration > 0:
+                mc.gauge_set("lightllm_step_decode_throughput", new_tokens / duration)
+
+        # Activate the already-registered but unused metrics
+        mc.counter_inc("lightllm_batch_inference_count", label=method)
+        mc.histogram_observe("lightllm_batch_inference_duration_bucket", duration, label=method)
+
+        # Batch utilization
+        if self.batch_max_tokens and self.batch_max_tokens > 0:
+            mc.histogram_observe("lightllm_batch_token_utilization", total_tokens / self.batch_max_tokens)
+        max_req_num = getattr(self.args, "max_req_num", 0)
+        if max_req_num > 0 and batch_size > 0:
+            mc.histogram_observe("lightllm_batch_size_utilization", batch_size / max_req_num)
+
+        # KV Cache hit/miss
+        mc.histogram_observe("lightllm_kv_cache_hit_tokens", prefix_tokens)
+        miss_tokens = new_tokens  # new tokens that were not in cache
+        mc.histogram_observe("lightllm_kv_cache_miss_tokens", miss_tokens)
+
+        # KV Cache utilization ratio
+        try:
+            total_capacity = self.model.mem_manager.size
+            can_use = g_infer_context.get_can_alloc_token_num()
+            if total_capacity > 0:
+                mc.gauge_set("lightllm_kv_cache_utilization_ratio", 1.0 - can_use / total_capacity)
+        except Exception:
+            pass
+
+        # Attention duration (approximated as total step duration)
+        mc.histogram_observe("lightllm_attention_duration", duration, label=method)
+
+    def _on_kv_cache_eviction(self, evicted_token_count: int):
+        """Callback from RadixCache.evict() to report eviction metrics."""
+        mc = self.metric_client
+        if mc is None or not self.is_master_in_dp:
+            return
+        mc.counter_inc("lightllm_kv_cache_eviction_events")
+        mc.counter_inc("lightllm_kv_cache_evicted_tokens", value=evicted_token_count)
+
+    def _gpu_metrics_loop(self):
+        """Background thread that periodically collects GPU hardware metrics."""
+        device_id = self.current_device_id
+        torch.cuda.set_device(device_id)
+
+        while True:
+            try:
+                # Memory stats via torch.cuda (no extra dependency)
+                free_mem, total_mem = torch.cuda.mem_get_info()
+                self.metric_client.gauge_set("lightllm_gpu_memory_used_bytes", total_mem - free_mem)
+                self.metric_client.gauge_set("lightllm_gpu_memory_total_bytes", total_mem)
+
+                # GPU utilization via pynvml (optional)
+                try:
+                    import pynvml
+
+                    pynvml.nvmlInit()
+                    handle = pynvml.nvmlDeviceGetHandleByIndex(device_id)
+                    util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                    self.metric_client.gauge_set("lightllm_gpu_utilization_percent", util.gpu)
+                    pynvml.nvmlShutdown()
+                except (ImportError, Exception):
+                    pass
+            except Exception:
+                pass
+            time.sleep(5.0)

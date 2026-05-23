@@ -76,7 +76,16 @@ class LinearAttCacheConfig:
 
         model_cfg, _ = PretrainedConfig.get_config_dict(model_path)
         model_type = model_cfg["model_type"]
-        assert model_type in ["qwen3_5", "qwen3_5_moe", "qwen3_5_text", "qwen3_5_moe_text"]
+        assert model_type in [
+            "qwen3_5",
+            "qwen3_5_moe",
+            "qwen3_5_text",
+            "qwen3_5_moe_text",
+            "qwen3_6",
+            "qwen3_6_moe",
+            "qwen3_6_text",
+            "qwen3_6_moe_text",
+        ]
         llm_config = model_cfg
         try:
             llm_config = llm_config["text_config"]

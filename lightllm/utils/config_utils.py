@@ -225,7 +225,7 @@ def get_eos_token_ids(model_path: str) -> Optional[List[int]]:
     try:
         config_json = get_config_json(model_path)
         model_type = config_json.get("model_type") or config_json.get("text_config", {}).get("model_type")
-        if model_type in {"qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text"}:
+        if model_type in {"qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text", "qwen3_6", "qwen3_6_text", "qwen3_6_moe", "qwen3_6_moe_text"}:
             from transformers import AutoTokenizer
 
             tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=False)
@@ -333,7 +333,7 @@ def has_vision_module(model_path: str) -> bool:
         ):
             # Qwen3OmniMoeVisionTransformerPretrainedModel
             return True
-        elif model_type in ["qwen3_5", "qwen3_5_moe"]:
+        elif model_type in ["qwen3_5", "qwen3_5_moe", "qwen3_6", "qwen3_6_moe"]:
             return True
         else:
             raise Exception("unknown vision model type")
@@ -372,7 +372,7 @@ def is_linear_att_mixed_model(model_path: str) -> bool:
 
         model_cfg, _ = PretrainedConfig.get_config_dict(model_path)
         model_type = model_cfg["model_type"]
-        if model_type in ["qwen3_5", "qwen3_5_moe", "qwen3_5_text", "qwen3_5_moe_text"]:
+        if model_type in ["qwen3_5", "qwen3_5_moe", "qwen3_5_text", "qwen3_5_moe_text", "qwen3_6", "qwen3_6_moe", "qwen3_6_text", "qwen3_6_moe_text"]:
             return True
         else:
             return False
@@ -399,7 +399,7 @@ def get_tool_call_parser_for_model(model_path: str) -> Optional[str]:
         return None
 
     # Qwen3.5 series
-    if model_type in ["qwen3_5", "qwen3_5_moe", "qwen3_5_text", "qwen3_5_moe_text"]:
+    if model_type in ["qwen3_5", "qwen3_5_moe", "qwen3_5_text", "qwen3_5_moe_text", "qwen3_6", "qwen3_6_moe", "qwen3_6_text", "qwen3_6_moe_text"]:
         return "qwen3_coder"
 
     # Qwen3 series
@@ -427,7 +427,7 @@ def get_reasoning_parser_for_model(model_path: str) -> Optional[str]:
     if model_type is None:
         return None
 
-    # Qwen3.5 and Qwen3 series
+    # Qwen3.5 / Qwen3.6 and Qwen3 series
     if model_type in [
         "qwen3",
         "qwen3_moe",
@@ -439,6 +439,10 @@ def get_reasoning_parser_for_model(model_path: str) -> Optional[str]:
         "qwen3_5_moe",
         "qwen3_5_text",
         "qwen3_5_moe_text",
+        "qwen3_6",
+        "qwen3_6_moe",
+        "qwen3_6_text",
+        "qwen3_6_moe_text",
     ]:
         return "qwen3"
 

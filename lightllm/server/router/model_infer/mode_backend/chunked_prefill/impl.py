@@ -75,19 +75,25 @@ class ChunkedPrefillBackend(ModeBackend):
                     # 进行一次流同步，保证 _try_read_new_reqs 中的一些算子操作，必然已经完成。
                     # 防止后续的推理流程读取到显存中可能存在错误的数据。
                     g_infer_context.get_overlap_stream().wait_stream(torch.cuda.current_stream())
+                    t_step_start = time.time()
                     self.prefill(
                         event_pack=event_pack,
                         prefill_reqs=prefill_reqs,
                     )
+                    t_step_duration = time.time() - t_step_start
+                    self._emit_step_metrics("prefill", t_step_duration)
                     continue
                 elif run_way.is_decode():
                     # 进行一次流同步，保证 _try_read_new_reqs 中的一些算子操作，必然已经完成。
                     # 防止后续的推理流程读取到显存中可能存在错误的数据。
                     g_infer_context.get_overlap_stream().wait_stream(torch.cuda.current_stream())
+                    t_step_start = time.time()
                     self.decode(
                         event_pack=event_pack,
                         decode_reqs=decode_reqs,
                     )
+                    t_step_duration = time.time() - t_step_start
+                    self._emit_step_metrics("decode", t_step_duration)
                     continue
                 elif run_way.is_pass():
                     event_pack.notify_post_handle_and_wait_pre_post_handle()
@@ -107,6 +113,12 @@ class ChunkedPrefillBackend(ModeBackend):
     ):
         # 第一阶段: 模型推理
         model_input, run_reqs = prepare_prefill_inputs(prefill_reqs, is_chuncked_mode=not self.disable_chunked_prefill)
+
+        # Store step metrics data for _emit_step_metrics
+        self._last_step_batch_size = len(prefill_reqs)
+        self._last_step_total_tokens = model_input.total_token_num
+        self._last_step_prefix_tokens = model_input.prefix_total_token_num or 0
+        self._last_step_new_tokens = model_input.total_token_num - self._last_step_prefix_tokens
         with torch.cuda.stream(g_infer_context.get_overlap_stream()):
             model_output = self.model.forward(model_input)
             _, next_token_ids_cpu, next_token_logprobs_cpu = self._sample_and_scatter_token(
@@ -150,6 +162,12 @@ class ChunkedPrefillBackend(ModeBackend):
         decode_reqs: List[InferReq],
     ):
         model_input, run_reqs = prepare_decode_inputs(decode_reqs)
+
+        # Store step metrics data for _emit_step_metrics
+        self._last_step_batch_size = len(decode_reqs)
+        self._last_step_total_tokens = model_input.total_token_num
+        self._last_step_prefix_tokens = 0  # decode has no prefix cache hit
+        self._last_step_new_tokens = len(decode_reqs)
         with torch.cuda.stream(g_infer_context.get_overlap_stream()):
             model_output = self.model.forward(model_input)
             _, next_token_ids_cpu, next_token_logprobs_cpu = self._sample_and_scatter_token(
@@ -188,6 +206,12 @@ class ChunkedPrefillBackend(ModeBackend):
         prefill_reqs: List[InferReq],
     ):
         model_input, run_reqs = prepare_prefill_inputs(prefill_reqs, is_chuncked_mode=not self.disable_chunked_prefill)
+
+        # Store step metrics data for _emit_step_metrics
+        self._last_step_batch_size = len(prefill_reqs)
+        self._last_step_total_tokens = model_input.total_token_num
+        self._last_step_prefix_tokens = model_input.prefix_total_token_num or 0
+        self._last_step_new_tokens = model_input.total_token_num - self._last_step_prefix_tokens
         with torch.cuda.stream(g_infer_context.get_overlap_stream()):
             model_output = self.model.forward(model_input)
             next_token_ids, next_token_ids_cpu, next_token_logprobs_cpu = self._sample_and_scatter_token(
@@ -240,6 +264,12 @@ class ChunkedPrefillBackend(ModeBackend):
         MTP解码的通用流程，整合eagle和vanilla的共同逻辑
         """
         model_input, run_reqs = prepare_decode_inputs(decode_reqs)
+
+        # Store step metrics data for _emit_step_metrics
+        self._last_step_batch_size = len(decode_reqs)
+        self._last_step_total_tokens = model_input.total_token_num
+        self._last_step_prefix_tokens = 0
+        self._last_step_new_tokens = len(decode_reqs)
 
         with torch.cuda.stream(g_infer_context.get_overlap_stream()):
             b_mtp_index_cpu = model_input.b_mtp_index

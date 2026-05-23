@@ -125,6 +125,9 @@ class RadixCache:
         )
         self.tree_total_tokens_num.arr[0] = 0
 
+        # Optional eviction callback, set by ModeBackend for metrics
+        self._eviction_callback = None
+
     def insert(self, key, value=None) -> Tuple[int, Optional[TreeNode]]:
         if value is None:
             value = key
@@ -340,6 +343,10 @@ class RadixCache:
             parent_node.remove_child(node)
             if parent_node.is_leaf():
                 self.evict_tree_set.add(parent_node)
+
+        # Notify metrics callback about eviction
+        if self._eviction_callback is not None:
+            self._eviction_callback(num_evicted)
 
         return
 
